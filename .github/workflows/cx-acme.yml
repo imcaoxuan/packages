@@ -1,0 +1,146 @@
+name: Build cx-acme
+
+on:
+  workflow_dispatch:
+    inputs:
+      openwrt_version:
+        description: OpenWrt release version
+        type: string
+        default: '23.05.2'
+      target:
+        description: Target/subtarget
+        type: string
+        default: 'x86/64'
+  push:
+    branches:
+      - master
+    paths:
+      - 'net/cx-acme/**'
+      - 'applications/luci-app-cx-acme/**'
+      - '.github/workflows/cx-acme.yml'
+    tags:
+      - 'cx-acme-v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cx-acme-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build packages (SDK)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve SDK download URL
+        id: sdk
+        env:
+          VERSION: ${{ inputs.openwrt_version || '23.05.2' }}
+          TARGET: ${{ inputs.target || 'x86/64' }}
+        run: |
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Invalid OpenWrt version: must be like 23.05.2"
+            exit 1
+          fi
+          if ! printf '%s' "$TARGET" | grep -Eq '^[a-z0-9]+/[a-z0-9]+$'; then
+            echo "::error::Invalid target: must be like x86/64"
+            exit 1
+          fi
+          base="https://downloads.openwrt.org/releases/${VERSION}/targets/${TARGET}"
+          file=$(curl -sfL "$base/" | grep -o 'openwrt-sdk-[^"]*Linux-x86_64\.tar\.xz' | head -n1)
+          if [ -z "$file" ]; then
+            echo "::error::No x86_64 SDK found at $base/"
+            exit 1
+          fi
+          {
+            echo "url=$base/$file"
+            echo "file=$file"
+            echo "dir=${file%.tar.xz}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Cache SDK tarball
+        uses: actions/cache@v4
+        with:
+          path: ~/sdk-download
+          key: openwrt-sdk-${{ steps.sdk.outputs.file }}
+
+      - name: Download and extract SDK
+        env:
+          SDK_URL: ${{ steps.sdk.outputs.url }}
+          SDK_FILE: ${{ steps.sdk.outputs.file }}
+          SDK_DIR: ${{ steps.sdk.outputs.dir }}
+        run: |
+          mkdir -p ~/sdk-download
+          if [ ! -f "$HOME/sdk-download/$SDK_FILE" ]; then
+            curl -sfL "$SDK_URL" -o "$HOME/sdk-download/$SDK_FILE"
+          fi
+          tar -xf "$HOME/sdk-download/$SDK_FILE"
+          mv "$SDK_DIR" sdk
+
+      - name: Install host dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libncurses-dev zlib1g-dev gawk gettext unzip file wget python3
+
+      - name: Add cx-acme packages to SDK
+        run: |
+          cp -a net/cx-acme sdk/package/
+          cp -a applications/luci-app-cx-acme sdk/package/
+
+      - name: Update and install feeds
+        run: |
+          cd sdk
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Configure
+        run: |
+          cd sdk
+          cat > .config <<'EOF'
+          CONFIG_PACKAGE_cx-acme=m
+          CONFIG_PACKAGE_cx-acme-dnsapi=m
+          CONFIG_PACKAGE_luci-app-cx-acme=m
+          EOF
+          make defconfig
+
+      - name: Build packages
+        run: |
+          cd sdk
+          make -j"$(nproc)" package/cx-acme/compile package/luci-app-cx-acme/compile V=s
+
+      - name: Collect packages
+        run: |
+          mkdir -p dist
+          find sdk/bin/packages -name '*cx-acme*.ipk' -exec cp {} dist/ \;
+          if [ -z "$(ls dist/)" ]; then
+            echo "::error::No .ipk files produced"
+            exit 1
+          fi
+          ls -la dist/
+          {
+            echo '### Built packages'
+            echo '```'
+            ls -la dist/
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cx-acme-ipk
+          path: dist/*.ipk
+          if-no-files-found: error
+
+      - name: Create release
+        if: startsWith(github.ref, 'refs/tags/cx-acme-v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG_NAME" dist/*.ipk \
+            --title "$TAG_NAME" \
+            --generate-notes

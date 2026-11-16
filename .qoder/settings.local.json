@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls /Users/Shared/AIProjects/ && ls net/acme-common net/acme-acmesh)",
+      "Read(//Users/Shared/AIProjects/**)",
+      "Bash(find net/acme-common net/acme-acmesh -type f | head -50)"
+    ]
+  }
+}

@@ -1,6 +1,6 @@
 {
 	"admin/services/cx-acme": {
-		"title": "ACME certificates",
+		"title": "cx-acme",
 		"order": 50,
 		"action": {
 			"type": "alias",

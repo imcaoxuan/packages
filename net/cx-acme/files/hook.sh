@@ -138,34 +138,49 @@ get)
 					-e 's|/var/run/acme/|/var/run/cx-acme/|g' \
 					"$domain_dir/$main_domain.conf"
 			fi
-			set -- "$@" --renew --home "$state_dir" -d "$main_domain"
-			log info "$ACME $*"
-			trap "handle_signal renew Renewal" INT TERM
-			open_port renew
-			flock "$lock_file" "$ACME" "$@" &
-			wait $!
-			status=$?
-			trap - INT TERM
-			del_nft_rule
 
-			case $status in
-			0)
-				link_certs "$domain_dir" "$main_domain"
-				exit 0
-				;;
-			2)
-				# renew skipped, but ensure the links exist (e.g. after
-				# state migration) so services and the UI find the cert
-				if [ -f "$domain_dir/fullchain.cer" ]; then
+			# --renew reuses the domain list saved at issuance time. If the
+			# configured list changed, fall through to --issue instead;
+			# acme.sh detects the change and re-issues even when not due.
+			conf="$domain_dir/$main_domain.conf"
+			saved_main=$(grep "^Le_Domain=" "$conf" 2>/dev/null | cut -d "'" -f 2)
+			saved_alt=$(grep "^Le_Alt=" "$conf" 2>/dev/null | cut -d "'" -f 2)
+			# shellcheck disable=SC2046
+			saved_set=$(printf '%s\n' "$saved_main" $(printf '%s' "$saved_alt" | tr ',' ' ') | sort)
+			# shellcheck disable=SC2086
+			want_set=$(printf '%s\n' $domains | sort)
+
+			if [ "$saved_set" = "$want_set" ]; then
+				set -- "$@" --renew --home "$state_dir" -d "$main_domain"
+				log info "$ACME $*"
+				trap "handle_signal renew Renewal" INT TERM
+				open_port renew
+				flock "$lock_file" "$ACME" "$@" &
+				wait $!
+				status=$?
+				trap - INT TERM
+				del_nft_rule
+
+				case $status in
+				0)
 					link_certs "$domain_dir" "$main_domain"
-				fi
-				exit 0
-				;;
-			*)
-				$NOTIFY renew-failed
-				exit 1
-				;;
-			esac
+					exit 0
+					;;
+				2)
+					# renew skipped, but ensure the links exist (e.g. after
+					# state migration) so services and the UI find the cert
+					if [ -f "$domain_dir/fullchain.cer" ]; then
+						link_certs "$domain_dir" "$main_domain"
+					fi
+					exit 0
+					;;
+				*)
+					$NOTIFY renew-failed
+					exit 1
+					;;
+				esac
+			fi
+			log info "Domain list changed for $main_domain, re-issuing with the current domains"
 		fi
 	fi
 

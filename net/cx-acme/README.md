@@ -169,8 +169,10 @@ logread -e cx-acme        # 查看日志
 uci show cx-acme          # 查看配置
 ```
 
-配置变更（uci apply）会自动触发 renew。续期使用签发时保存的参数；
-**修改验证方式/DNS API 后若续期不生效**，删除对应状态目录强制重签：
+配置变更（uci apply）会自动触发 renew。**增删域名会自动检测并重新签发**
+（对比配置与状态中保存的域名集合，不一致时走重新签发流程）。
+续期对其余参数使用签发时保存的值；**修改验证方式/DNS API 后若续期不生效**，
+删除对应状态目录强制重签：
 
 ```sh
 rm -rf /etc/cx-acme/<domain> /etc/cx-acme/<domain>_ecc

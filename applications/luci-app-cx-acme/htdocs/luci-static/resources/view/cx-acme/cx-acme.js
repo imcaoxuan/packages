@@ -53,7 +53,7 @@ return view.extend({
 		let wikiInstructionUrl = wikiUrl + 'dnsapi';
 		let m, s, o;
 
-		m = new form.Map('cx-acme', _('ACME certificates'),
+		m = new form.Map('cx-acme', 'cx-acme',
 			_('This configures ACME (Let\'s Encrypt) automatic certificate installation. ' +
 				'Simply fill out this to have the router configured with Let\'s Encrypt-issued ' +
 				'certificates for the web interface.') + '<br />' +

@@ -1,0 +1,29 @@
+{
+	"admin/services/cx-acme": {
+		"title": "ACME certificates",
+		"order": 50,
+		"action": {
+			"type": "alias",
+			"path": "admin/services/cx-acme/configure"
+		},
+		"depends": {
+			"acl": [ "luci-app-cx-acme" ]
+		}
+	},
+	"admin/services/cx-acme/configure": {
+		"title": "Configure",
+		"order": 10,
+		"action": {
+			"type": "view",
+			"path": "cx-acme/cx-acme"
+		}
+	},
+	"admin/services/cx-acme/logread": {
+		"title": "Log View",
+		"order": 20,
+		"action": {
+			"type": "view",
+			"path": "cx-acme/logread"
+		}
+	}
+}

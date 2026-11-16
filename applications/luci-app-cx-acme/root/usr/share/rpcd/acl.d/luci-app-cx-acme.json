@@ -1,0 +1,21 @@
+{
+	"luci-app-cx-acme": {
+		"description": "Grant access to cx-acme configuration",
+		"read": {
+			"file": {
+				"/usr/lib/cx-acme/client/dnsapi": [ "list" ],
+				"/proc/sys/kernel/hostname": [ "read" ],
+				"/etc/ssl/cx-acme": [ "list" ],
+				"/etc/ssl/cx-acme/*": [ "list" ],
+				"/usr/libexec/cx-acme-dnsinfo.sh": [ "exec" ]
+			},
+			"uci": [ "cx-acme", "ddns" ],
+			"ubus": {
+				"log": [ "read" ]
+			}
+		},
+		"write": {
+			"uci": [ "cx-acme" ]
+		}
+	}
+}

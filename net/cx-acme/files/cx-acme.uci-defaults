@@ -1,0 +1,172 @@
+#!/bin/sh
+# shellcheck disable=SC3043,SC2317,SC1091
+# SC3043: busybox ash supports local; SC2317: callbacks are invoked via
+# config_foreach/config_list_foreach; SC1091: /lib/functions.sh is on-target
+. /lib/functions.sh
+
+# Point the default web server at the cx-acme challenge directory. Never
+# replace a real directory the user may have created for their own webroot.
+if [ -d /www ] && { [ -L /www/.well-known/acme-challenge ] || [ ! -e /www/.well-known/acme-challenge ]; }; then
+	mkdir -p /www/.well-known
+	ln -sfn /var/run/cx-acme/challenge/.well-known/acme-challenge /www/.well-known/acme-challenge
+fi
+
+# Keep ACME account keys and renewal timestamps from the old package so we
+# don't re-register accounts or hit rate limits. Directory layout (including
+# the _ecc suffix) is identical between acme and cx-acme.
+if [ -d /etc/acme ] && [ -z "$(ls -A /etc/cx-acme 2>/dev/null)" ]; then
+	cp -a /etc/acme/. /etc/cx-acme/
+	logger -t cx-acme -p daemon.info "Copied existing ACME state from /etc/acme to /etc/cx-acme"
+fi
+
+[ -f /etc/config/acme ] || exit 0
+if uci -q show cx-acme 2>/dev/null | grep -q '=cert$'; then
+	logger -t cx-acme -p daemon.info "cx-acme already has certificate sections, skipping config migration"
+	exit 0
+fi
+
+migrate_target=
+globals_done=0
+
+migrate_globals() {
+	local section="$1"
+	local val
+
+	[ "$globals_done" = 0 ] || return 0
+	globals_done=1
+
+	config_get val "$section" account_email
+	[ -n "$val" ] && uci_set cx-acme "$cx_global" account_email "$val"
+	config_get val "$section" debug
+	[ -n "$val" ] && uci_set cx-acme "$cx_global" debug "$val"
+}
+
+add_domain() {
+	uci_add_list cx-acme "$migrate_target" domains "$1"
+}
+
+migrate_credential() {
+	local entry="$1"
+	local key val
+
+	case "$entry" in
+	*=*) ;;
+	*)
+		logger -t cx-acme -p daemon.warn "Dropping invalid credential entry (expected KEY=VAL): $entry"
+		return 0
+		;;
+	esac
+	key="${entry%%=*}"
+	val="${entry#*=}"
+
+	# strip one layer of paired quotes, matching the LuCI parser
+	case "$val" in
+	\"*\")
+		val="${val#\"}"
+		val="${val%\"}"
+		;;
+	\'*\')
+		val="${val#\'}"
+		val="${val%\'}"
+		;;
+	esac
+
+	# acme.sh wraps saved values in unescaped single quotes
+	case "$val" in
+	*"'"*)
+		logger -t cx-acme -p daemon.warn "Dropping credential $key: values must not contain single quotes"
+		return 0
+		;;
+	esac
+
+	uci_add_list cx-acme "$migrate_target" credentials "$key=$val"
+}
+
+migrate_cert() {
+	local section="$1"
+	local opt val key_type keylength staging use_staging
+	local validation_method standalone tls dns acme_uri acme_server
+
+	migrate_target="$section"
+	if uci -q get "cx-acme.$migrate_target" >/dev/null 2>&1; then
+		migrate_target="${section}_migrated"
+	fi
+	uci set "cx-acme.$migrate_target=cert"
+
+	for opt in enabled dns calias dalias dns_wait days cert_profile listen_port; do
+		config_get val "$section" "$opt"
+		[ -n "$val" ] && uci_set cx-acme "$migrate_target" "$opt" "$val"
+	done
+
+	config_list_foreach "$section" domains add_domain
+	config_list_foreach "$section" credentials migrate_credential
+
+	config_get staging "$section" staging
+	if [ -z "$staging" ]; then
+		config_get use_staging "$section" use_staging
+		staging="$use_staging"
+	fi
+	[ -n "$staging" ] && uci_set cx-acme "$migrate_target" staging "$staging"
+
+	config_get key_type "$section" key_type
+	if [ -z "$key_type" ]; then
+		config_get keylength "$section" keylength
+		case "$keylength" in
+		ec-256) key_type=ec256 ;;
+		ec-384) key_type=ec384 ;;
+		2048 | 3072 | 4096) key_type="rsa$keylength" ;;
+		'') ;;
+		*)
+			key_type=ec256
+			logger -t cx-acme -p daemon.warn "Invalid keylength '$keylength' in $section, defaulting to ec256"
+			;;
+		esac
+	fi
+	[ -n "$key_type" ] && uci_set cx-acme "$migrate_target" key_type "$key_type"
+
+	config_get validation_method "$section" validation_method
+	if [ -z "$validation_method" ]; then
+		config_get dns "$section" dns
+		config_get standalone "$section" standalone
+		config_get tls "$section" tls
+		if [ -n "$dns" ]; then
+			validation_method=dns
+		elif [ "$standalone" = 1 ]; then
+			validation_method=standalone
+		elif [ "$tls" = 1 ]; then
+			validation_method=alpn
+		else
+			validation_method=webroot
+		fi
+	fi
+	uci_set cx-acme "$migrate_target" validation_method "$validation_method"
+
+	config_get acme_server "$section" acme_server
+	config_get acme_uri "$section" acme_uri
+	if [ -n "$acme_uri" ]; then
+		if [ -z "$acme_server" ]; then
+			uci_set cx-acme "$migrate_target" acme_server "$acme_uri"
+		elif [ "$acme_uri" != "$acme_server" ]; then
+			logger -t cx-acme -p daemon.warn "Both acme_uri and acme_server set in $section, keeping acme_server"
+		fi
+	fi
+
+	config_get val "$section" webroot
+	[ -n "$val" ] && logger -t cx-acme -p daemon.warn "Option webroot in $section was dropped; configure your web server to serve ACME challenges from /var/run/cx-acme/challenge"
+	config_get val "$section" state_dir
+	[ -n "$val" ] && logger -t cx-acme -p daemon.warn "Option state_dir in $section was dropped; cx-acme always uses /etc/cx-acme"
+
+	logger -t cx-acme -p daemon.info "Migrated certificate section $section from /etc/config/acme"
+}
+
+cx_global=$(uci -q show cx-acme 2>/dev/null | sed -n 's/^cx-acme\.\([^.=]*\)=acme$/\1/p' | head -n1)
+if [ -z "$cx_global" ]; then
+	cx_global=$(uci add cx-acme acme)
+fi
+
+config_load acme
+config_foreach migrate_globals acme
+config_foreach migrate_cert cert
+uci commit cx-acme
+
+exit 0

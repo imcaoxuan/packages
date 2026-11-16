@@ -1,0 +1,208 @@
+#!/bin/sh /etc/rc.common
+# shellcheck disable=SC3043,SC2034,SC2317,SC2016
+# SC3043: busybox ash supports local; SC2034: rc.common reads START/USE_PROCD;
+# SC2317: callbacks are invoked via config_foreach/config_list_foreach;
+# SC2016: backticks in messages are literal
+
+START=20
+USE_PROCD=1
+CHALLENGE_DIR=/var/run/cx-acme/challenge
+CERT_DIR=/etc/ssl/cx-acme
+STATE_DIR=/etc/cx-acme
+HOOK=/usr/lib/cx-acme/hook
+LOG_TAG=cx-acme
+
+# shellcheck source=net/cx-acme/files/functions.sh
+. "$IPKG_INSTROOT/usr/lib/cx-acme/functions.sh"
+
+extra_command "abort" "Abort running certificate issuances/renewals"
+extra_command "renew" "Run certificate issuances/renewals"
+
+first_arg() {
+	echo "$1"
+}
+
+load_globals() {
+	local section="$1"
+
+	# only read the first acme section
+	[ -z "$account_email" ] || return 0
+
+	config_get account_email "$section" account_email
+	if [ -z "$account_email" ]; then
+		log err "account_email option is required"
+		exit 1
+	fi
+
+	config_get_bool debug "$section" debug 0
+}
+
+get_cert() {
+	local section="$1"
+	local enabled validation_method dns listen_port domains main_domain
+	local staging calias dalias key_type acme_server days cert_profile dns_wait
+	local cred_invalid=0
+
+	config_get_bool enabled "$section" enabled 1
+	[ "$enabled" = 1 ] || return 0
+
+	config_get validation_method "$section" validation_method
+	case "$validation_method" in
+	standalone | alpn | webroot | dns) ;;
+	*)
+		log err "Section $section: validation_method must be standalone, alpn, webroot or dns"
+		return 1
+		;;
+	esac
+
+	config_get dns "$section" dns
+	if [ "$validation_method" = dns ] && [ -z "$dns" ]; then
+		log err "Section $section: dns option is required for DNS validation"
+		return 1
+	fi
+
+	config_get domains "$section" domains
+	if [ -z "$domains" ]; then
+		log err "Section $section: domains option is required"
+		return 1
+	fi
+	# shellcheck disable=SC2086
+	main_domain="$(first_arg $domains)"
+
+	check_credential() {
+		local key stripped
+		case "$1" in
+		*=*)
+			key="${1%%=*}"
+			;;
+		*)
+			log err "Section $section: invalid credential entry (expected KEY=VAL): $1"
+			cred_invalid=1
+			return 0
+			;;
+		esac
+		# a glob like [A-Za-z_][A-Za-z0-9_]* only constrains the first two
+		# characters, so validate the key by stripping valid characters
+		case "$key" in
+		[A-Za-z_]*) ;;
+		*)
+			log err "Section $section: invalid credential key: $key"
+			cred_invalid=1
+			return 0
+			;;
+		esac
+		stripped=$(printf '%s' "$key" | tr -d 'A-Za-z0-9_')
+		if [ -n "$stripped" ]; then
+			log err "Section $section: invalid credential key: $key"
+			cred_invalid=1
+			return 0
+		fi
+		# acme.sh wraps saved values in unescaped single quotes,
+		# so a single quote in a value would corrupt account.conf
+		case "$1" in
+		*"'"*)
+			log err "Section $section: credential values must not contain single quotes"
+			cred_invalid=1
+			;;
+		esac
+	}
+	config_list_foreach "$section" credentials check_credential
+	[ "$cred_invalid" = 0 ] || return 1
+
+	case "$validation_method" in
+	standalone)
+		config_get listen_port "$section" listen_port 80
+		;;
+	alpn)
+		config_get listen_port "$section" listen_port 443
+		;;
+	*)
+		config_get listen_port "$section" listen_port
+		;;
+	esac
+
+	config_get_bool staging "$section" staging 0
+	config_get calias "$section" calias
+	config_get dalias "$section" dalias
+	config_get key_type "$section" key_type ec256
+	config_get acme_server "$section" acme_server
+	config_get days "$section" days
+	config_get cert_profile "$section" cert_profile
+	config_get dns_wait "$section" dns_wait
+
+	procd_open_instance "$section"
+	procd_set_param command "$HOOK" get
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_set_param env CHALLENGE_DIR="$CHALLENGE_DIR" CERT_DIR="$CERT_DIR" state_dir="$STATE_DIR"
+	procd_append_param env account_email="$account_email" debug="$debug"
+	procd_append_param env domains="$domains" main_domain="$main_domain"
+	procd_append_param env validation_method="$validation_method" dns="$dns" listen_port="$listen_port"
+	procd_append_param env staging="$staging" calias="$calias" dalias="$dalias"
+	procd_append_param env key_type="$key_type" acme_server="$acme_server" days="$days"
+	procd_append_param env cert_profile="$cert_profile" dns_wait="$dns_wait"
+
+	append_credential() {
+		# procd splits KEY=VAL on the first '=' without shell evaluation,
+		# so values are passed through verbatim; no eval, no quoting
+		procd_append_param env "$1"
+	}
+	config_list_foreach "$section" credentials append_credential
+
+	procd_close_instance
+}
+
+start_service() {
+	grep -q '/etc/init.d/cx-acme' /etc/crontabs/root 2>/dev/null || {
+		echo "0 0 * * * /etc/init.d/cx-acme renew" >>/etc/crontabs/root
+	}
+}
+
+service_started() {
+	echo 'Nightly certificate renewal enabled. To renew now, run `service cx-acme renew`.'
+}
+
+stop_service() {
+	[ -f /etc/crontabs/root ] && sed -i '\|/etc/init.d/cx-acme|d' /etc/crontabs/root
+	running && stop_aborted="Running certificate renewal(s) aborted and a"
+}
+
+service_stopped() {
+	if enabled; then
+		untilboot=' until next boot. To disable permanently, run `service cx-acme disable`'
+	fi
+	echo "${stop_aborted:-A}utomatic nightly renewal disabled$untilboot."
+	echo 'To re-enable nightly renewal, run `service cx-acme start`. To issue/renew now, run `service cx-acme renew`.'
+}
+
+service_triggers() {
+	procd_add_config_trigger config.change cx-acme \
+		/etc/init.d/cx-acme renew
+}
+
+load_and_run() {
+	config_load cx-acme
+	config_foreach load_globals acme
+
+	config_foreach get_cert cert
+}
+
+renew() {
+	echo "Starting certificate issuance/renewal in the background; see system log for progress."
+	echo 'Issuances/renewals can be aborted with `service cx-acme abort`.'
+	rc_procd load_and_run
+}
+
+abort() {
+	procd_lock
+	if running "$@"; then
+		procd_kill "$(basename "${basescript:-$initscript}")" "$1"
+		echo "Aborting certificate issuance(s)/renewal(s); see system log for confirmation."
+	elif [ -z "$1" ]; then
+		echo "No certificate issuances/renewals running to abort!"
+		exit 1
+	else
+		echo "No certificate issuance/renewal \"$1\" running to abort!"
+		exit 1
+	fi
+}

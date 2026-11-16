@@ -130,6 +130,14 @@ get)
 			log info "Certificates are previously issued from a staging server, but staging option is disabled, moved to $domain_dir.staging."
 			staging_moved=1
 		else
+			# state copied from the old acme package may reference legacy
+			# hook/webroot paths in the saved domain conf; acme.sh reuses
+			# those saved hooks on renewal, so rewrite them in place
+			if [ -f "$domain_dir/$main_domain.conf" ]; then
+				sed -i -e 's|/usr/lib/acme/|/usr/lib/cx-acme/|g' \
+					-e 's|/var/run/acme/|/var/run/cx-acme/|g' \
+					"$domain_dir/$main_domain.conf"
+			fi
 			set -- "$@" --renew --home "$state_dir" -d "$main_domain"
 			log info "$ACME $*"
 			trap "handle_signal renew Renewal" INT TERM

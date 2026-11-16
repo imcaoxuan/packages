@@ -16,6 +16,10 @@ fi
 # the _ecc suffix) is identical between acme and cx-acme.
 if [ -d /etc/acme ] && [ -z "$(ls -A /etc/cx-acme 2>/dev/null)" ]; then
 	cp -a /etc/acme/. /etc/cx-acme/
+	# saved domain confs reference the old hook and webroot paths
+	find /etc/cx-acme -name '*.conf' -exec sed -i \
+		-e 's|/usr/lib/acme/|/usr/lib/cx-acme/|g' \
+		-e 's|/var/run/acme/|/var/run/cx-acme/|g' {} +
 	logger -t cx-acme -p daemon.info "Copied existing ACME state from /etc/acme to /etc/cx-acme"
 fi
 

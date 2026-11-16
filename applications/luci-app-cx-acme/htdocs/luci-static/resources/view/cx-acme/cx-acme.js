@@ -165,6 +165,9 @@ return view.extend({
 			if (!value)
 				return true;
 
+			if (_isSpecialUse(value.replace(/^\*\./, '')))
+				return _('Domain is reserved for local or special use (e.g. home.arpa, .local, .test) and cannot be issued by public CAs');
+
 			let labels = value.split('.');
 			if (labels.length < 2)
 				return _('Invalid domain. Allowed lowercase a-z, numbers and hyphen -');
@@ -341,7 +344,20 @@ function _isFqdn(domain) {
 	return /^[a-z0-9-]+$/.test(tld);
 }
 
+// RFC 8375 / RFC 6761 / RFC 2606 special-use and common local suffixes;
+// public CAs like Let's Encrypt cannot issue certificates for these
+const SPECIAL_USE_SUFFIXES = [
+	'home.arpa', 'local', 'localhost', 'invalid', 'test', 'example',
+	'internal', 'lan', 'home'
+];
+
+function _isSpecialUse(domain) {
+	return SPECIAL_USE_SUFFIXES.some(s => domain == s || domain.endsWith('.' + s));
+}
+
 function _guessDomain(hostname) {
+	if (_isSpecialUse(hostname))
+		return '';
 	return _isFqdn(hostname) ? hostname : (_isFqdn(window.location.hostname) ? window.location.hostname : '');
 }
 

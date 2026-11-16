@@ -21,6 +21,32 @@ if [ -d /etc/acme ] && [ -z "$(ls -A /etc/cx-acme 2>/dev/null)" ]; then
 		-e 's|/usr/lib/acme/|/usr/lib/cx-acme/|g' \
 		-e 's|/var/run/acme/|/var/run/cx-acme/|g' {} +
 	logger -t cx-acme -p daemon.info "Copied existing ACME state from /etc/acme to /etc/cx-acme"
+
+	# recreate certificate links from the migrated state so services and
+	# the UI find them before the first successful renewal
+	for d in /etc/cx-acme/*/; do
+		[ -d "$d" ] || continue
+		case "$d" in
+		*.staging/ | *.failed-*/) continue ;;
+		esac
+		main="${d%/}"
+		main="${main##*/}"
+		case "$main" in
+		*_ecc) main="${main%_ecc}" ;;
+		esac
+		if [ ! -f "$d/fullchain.cer" ] || [ ! -f "$d/$main.key" ]; then
+			continue
+		fi
+		(
+			umask 077
+			cat "$d/fullchain.cer" "$d/$main.key" >"$d/combined.cer"
+		)
+		ln -sf "$d/$main.cer" "/etc/ssl/cx-acme/$main.crt"
+		ln -sf "$d/$main.key" "/etc/ssl/cx-acme/$main.key"
+		ln -sf "$d/fullchain.cer" "/etc/ssl/cx-acme/$main.fullchain.crt"
+		ln -sf "$d/combined.cer" "/etc/ssl/cx-acme/$main.combined.crt"
+		ln -sf "$d/ca.cer" "/etc/ssl/cx-acme/$main.chain.crt"
+	done
 fi
 
 [ -f /etc/config/acme ] || exit 0

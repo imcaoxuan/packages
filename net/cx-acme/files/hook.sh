@@ -154,7 +154,11 @@ get)
 				exit 0
 				;;
 			2)
-				# renew skipped, ignore.
+				# renew skipped, but ensure the links exist (e.g. after
+				# state migration) so services and the UI find the cert
+				if [ -f "$domain_dir/fullchain.cer" ]; then
+					link_certs "$domain_dir" "$main_domain"
+				fi
 				exit 0
 				;;
 			*)

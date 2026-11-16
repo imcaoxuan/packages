@@ -179,11 +179,14 @@ service cx-acme renew
 
 ## 事件集成
 
-签发/续期事件通过 hotplug 与 ubus 发出，可用于自动重启服务：
+签发/续期事件通过 hotplug 与 ubus 发出，**同时使用 `cx-acme` 和 `acme` 两个命名空间**，
+兼容既有生态：nginx、haproxy 的 init 脚本通过 `procd_add_raw_trigger acme.renew`
+自动 reload，安装 cx-acme 后开箱即用（首次签发也会触发，不必等到续期）。
 
-- hotplug：`/etc/hotplug.d/cx-acme/` 下脚本收到 `ACTION` =
+- hotplug：`/etc/hotplug.d/cx-acme/` 与 `/etc/hotplug.d/acme/` 下脚本收到 `ACTION` =
   `prepare` / `issued` / `renewed` / `issue-failed` / `renew-failed`
-- ubus service event：`cx-acme.issue`、`cx-acme.renew`
+- ubus service event：`cx-acme.issue`、`cx-acme.renew`，以及兼容的
+  `acme.issue`、`acme.renew`
 
 例：证书更新后重启 uhttpd（`/etc/hotplug.d/cx-acme/50-reload`）：
 

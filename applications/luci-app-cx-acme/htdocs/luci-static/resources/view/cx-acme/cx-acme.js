@@ -7,6 +7,13 @@
 'require view.cx-acme.credentials as creds';
 'require view.cx-acme.dnsapi as dnsapi';
 
+// RFC 8375 / RFC 6761 / RFC 2606 special-use and common local suffixes;
+// public CAs like Let's Encrypt cannot issue certificates for these
+const SPECIAL_USE_SUFFIXES = [
+	'home.arpa', 'local', 'localhost', 'invalid', 'test', 'example',
+	'internal', 'lan', 'home'
+];
+
 return view.extend({
 	load() {
 		return Promise.all([
@@ -343,13 +350,6 @@ function _isFqdn(domain) {
 		return false;
 	return /^[a-z0-9-]+$/.test(tld);
 }
-
-// RFC 8375 / RFC 6761 / RFC 2606 special-use and common local suffixes;
-// public CAs like Let's Encrypt cannot issue certificates for these
-const SPECIAL_USE_SUFFIXES = [
-	'home.arpa', 'local', 'localhost', 'invalid', 'test', 'example',
-	'internal', 'lan', 'home'
-];
 
 function _isSpecialUse(domain) {
 	return SPECIAL_USE_SUFFIXES.some(s => domain == s || domain.endsWith('.' + s));

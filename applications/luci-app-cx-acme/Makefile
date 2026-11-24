@@ -11,7 +11,7 @@ LUCI_TITLE:=CX-ACME package - LuCI interface
 LUCI_DEPENDS:=+luci-base +cx-acme
 
 PKG_VERSION:=1.0.0
-PKG_RELEASE:=2
+PKG_RELEASE:=3
 PKG_MAINTAINER:=CX <cx@imcaoxuan.cn>
 PKG_LICENSE:=GPL-3.0-or-later
 

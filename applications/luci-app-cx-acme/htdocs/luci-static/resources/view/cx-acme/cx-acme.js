@@ -7,13 +7,6 @@
 'require view.cx-acme.credentials as creds';
 'require view.cx-acme.dnsapi as dnsapi';
 
-// RFC 8375 / RFC 6761 / RFC 2606 special-use and common local suffixes;
-// public CAs like Let's Encrypt cannot issue certificates for these
-const SPECIAL_USE_SUFFIXES = [
-	'home.arpa', 'local', 'localhost', 'invalid', 'test', 'example',
-	'internal', 'lan', 'home'
-];
-
 return view.extend({
 	load() {
 		return Promise.all([
@@ -64,8 +57,6 @@ return view.extend({
 			_('This configures ACME (Let\'s Encrypt) automatic certificate installation. ' +
 				'Simply fill out this to have the router configured with Let\'s Encrypt-issued ' +
 				'certificates for the web interface.') + '<br />' +
-			_('Note that the domain names in the certificate must already be configured to ' +
-				'point at the router\'s public IP address.') + '<br />' +
 			_('Once configured, issuing certificates can take a while. ' +
 				'Check the logs for progress and any errors.') + '<br />' +
 			_('Cert files are stored in') + ' <em>/etc/ssl/cx-acme</em>' + '<br />' +
@@ -163,8 +154,7 @@ return view.extend({
 
 		o = s.taboption('general', form.DynamicList, 'domains', _('Domain names'),
 			_('Domain names to include in the certificate. ' +
-				'The first name will be the subject name, subsequent names will be alt names. ' +
-				'Note that all domain names must point at the router in the global DNS.'));
+				'The first name will be the subject name, subsequent names will be alt names.'));
 		o.datatype = 'list(string)';
 		if (systemDomain)
 			o.default = [systemDomain];
@@ -172,19 +162,13 @@ return view.extend({
 			if (!value)
 				return true;
 
-			if (_isSpecialUse(value.replace(/^\*\./, '')))
-				return _('Domain is reserved for local or special use (e.g. home.arpa, .local, .test) and cannot be issued by public CAs');
-
 			let labels = value.split('.');
-			if (labels.length < 2)
-				return _('Invalid domain. Allowed lowercase a-z, numbers and hyphen -');
-
 			if (labels[0] == '*') {
 				let method = this.section.children.filter(o => o.option == 'validation_method')[0].formvalue(section_id);
 				if (method && method !== 'dns')
 					return _('wildcards * require Validation method: DNS');
 				labels = labels.slice(1);
-				if (labels.length < 2)
+				if (!labels.length)
 					return _('Invalid wildcard domain');
 			}
 
@@ -351,13 +335,7 @@ function _isFqdn(domain) {
 	return /^[a-z0-9-]+$/.test(tld);
 }
 
-function _isSpecialUse(domain) {
-	return SPECIAL_USE_SUFFIXES.some(s => domain == s || domain.endsWith('.' + s));
-}
-
 function _guessDomain(hostname) {
-	if (_isSpecialUse(hostname))
-		return '';
 	return _isFqdn(hostname) ? hostname : (_isFqdn(window.location.hostname) ? window.location.hostname : '');
 }
 

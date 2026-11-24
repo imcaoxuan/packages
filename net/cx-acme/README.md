@@ -219,8 +219,7 @@ service uhttpd restart
 
 `acme_server` 填 directory URL 即可，如 step-ca：
 `https://ca.home.arpa:9000/acme/acme/directory`。
-私有 CA 可签发 `home.arpa` 等内部域名；但 **Let's Encrypt 等公共 CA 不能**
-（`home.arpa`、`.local`、`.test` 等为保留特殊用途域名，UI 会拒绝并提示）。
+LuCI 接受内部域名（例如 `nas.home.arpa` 或 `router.lan`），能否签发由所选 CA 的策略决定。
 私有 CA 的根证书需自行加入系统信任 store（`/etc/ssl/certs/`）。
 
 ## FAQ / 故障排查

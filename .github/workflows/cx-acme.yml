@@ -6,13 +6,14 @@ on:
       openwrt_version:
         description: OpenWrt release version
         type: string
-        default: '23.05.2'
+        default: '25.12.0'
       target:
         description: Target/subtarget
         type: string
         default: 'x86/64'
   push:
     branches:
+      - cx-acme
       - master
       - openwrt-23.05
     paths:
@@ -34,7 +35,7 @@ jobs:
     name: Build packages (SDK)
     # ubuntu-latest ships uutils coreutils whose `install --version` lacks
     # "GNU", failing the 23.05 SDK prereq check (openwrt/openwrt#13760)
-    runs-on: ubuntu-22.04
+    runs-on: ${{ startsWith(inputs.openwrt_version, '23.05.') && 'ubuntu-22.04' || 'ubuntu-24.04' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -42,11 +43,11 @@ jobs:
       - name: Resolve SDK download URL
         id: sdk
         env:
-          VERSION: ${{ inputs.openwrt_version || '23.05.2' }}
+          VERSION: ${{ inputs.openwrt_version || '25.12.0' }}
           TARGET: ${{ inputs.target || 'x86/64' }}
         run: |
           if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "::error::Invalid OpenWrt version: must be like 23.05.2"
+            echo "::error::Invalid OpenWrt version: must be like 25.12.0"
             exit 1
           fi
           if ! printf '%s' "$TARGET" | grep -Eq '^[a-z0-9]+/[a-z0-9]+$'; then
@@ -54,7 +55,7 @@ jobs:
             exit 1
           fi
           base="https://downloads.openwrt.org/releases/${VERSION}/targets/${TARGET}"
-          file=$(curl -sfL "$base/" | grep -o 'openwrt-sdk-[^"]*Linux-x86_64\.tar\.xz' | head -n1)
+          file=$(curl -fsSL "$base/sha256sums" | awk '$2 ~ /^\*?openwrt-sdk-.*Linux-x86_64\.tar\.(xz|zst)$/ { sub(/^\*/, "", $2); print $2 }')
           if [ -z "$file" ]; then
             echo "::error::No x86_64 SDK found at $base/"
             exit 1
@@ -62,7 +63,7 @@ jobs:
           {
             echo "url=$base/$file"
             echo "file=$file"
-            echo "dir=${file%.tar.xz}"
+            echo "dir=${file%.tar.*}"
           } >> "$GITHUB_OUTPUT"
 
       - name: Cache SDK tarball
@@ -70,6 +71,14 @@ jobs:
         with:
           path: ~/sdk-download
           key: openwrt-sdk-${{ steps.sdk.outputs.file }}
+
+      - name: Install host dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libncurses-dev zlib1g-dev gawk gettext unzip file wget python3 zstd
+          if [[ "$ImageOS" == ubuntu22 ]]; then
+            sudo apt-get install -y python3-distutils
+          fi
 
       - name: Download and extract SDK
         env:
@@ -83,11 +92,6 @@ jobs:
           fi
           tar -xf "$HOME/sdk-download/$SDK_FILE"
           mv "$SDK_DIR" sdk
-
-      - name: Install host dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential libncurses-dev zlib1g-dev gawk gettext unzip file wget python3 python3-distutils
 
       - name: Add cx-acme packages to SDK
         run: |
@@ -118,11 +122,15 @@ jobs:
       - name: Collect packages
         run: |
           mkdir -p dist
-          find sdk/bin/packages -name '*cx-acme*.ipk' -exec cp {} dist/ \;
-          if [ -z "$(ls dist/)" ]; then
-            echo "::error::No .ipk files produced"
-            exit 1
-          fi
+          for package in cx-acme cx-acme-dnsapi luci-app-cx-acme; do
+            mapfile -t files < <(find sdk/bin/packages -type f \
+              \( -name "${package}-[0-9]*.apk" -o -name "${package}_*.ipk" \))
+            if (( ${#files[@]} != 1 )); then
+              echo "::error::Expected one package for $package, found ${#files[@]}"
+              exit 1
+            fi
+            cp "${files[0]}" dist/
+          done
           ls -la dist/
           {
             echo '### Built packages'
@@ -134,8 +142,8 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: cx-acme-ipk
-          path: dist/*.ipk
+          name: cx-acme-${{ steps.sdk.outputs.dir }}
+          path: dist/*
           if-no-files-found: error
 
       - name: Create release
@@ -144,6 +152,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG_NAME: ${{ github.ref_name }}
         run: |
-          gh release create "$TAG_NAME" dist/*.ipk \
+          gh release create "$TAG_NAME" dist/* \
             --title "$TAG_NAME" \
             --generate-notes

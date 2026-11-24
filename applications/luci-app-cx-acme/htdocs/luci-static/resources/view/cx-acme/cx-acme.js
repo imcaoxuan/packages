@@ -25,7 +25,7 @@ return view.extend({
 			}),
 			L.resolveDefault(fs.exec_direct('/usr/libexec/cx-acme-dnsinfo.sh'), ''),
 			L.resolveDefault(fs.list('/usr/lib/cx-acme/client/dnsapi/'), []),
-			L.resolveDefault(fs.lines('/proc/sys/kernel/hostname'), ''),
+			fs.trimmed('/proc/sys/kernel/hostname'),
 			L.resolveDefault(uci.load('ddns')),
 		]);
 	},

@@ -31,19 +31,19 @@ cx-acme 是 OpenWrt 上的 ACME 自动证书管理方案，包装 [acme.sh](http
 
 ## 安装
 
-### 获取 ipk
+### 获取安装包
 
-- GitHub Actions：推送 `cx-acme-v*` tag 自动发布 Release；手动运行 "Build cx-acme"
-  工作流可在 Artifacts 下载（默认目标 OpenWrt 23.05.2 x86_64，可改版本/目标）。
-- 产物：`cx-acme_*.ipk`、`cx-acme-dnsapi_*.ipk`（DNS API 集合）、`luci-app-cx-acme_*.ipk`。
+- 使用 GitHub Actions 自行构建时，参见[使用 GitHub Actions 构建 APK](#使用-github-actions-构建-apk)。推送 `cx-acme-v*` 标签会将安装包发布到对应的 GitHub Release。
+- OpenWrt 25.12 使用 APK，产物为 `cx-acme`、`cx-acme-dnsapi`、`luci-app-cx-acme` 三个本地 `.apk` 包。
+- OpenWrt 23.05 使用 IPK：`cx-acme_*.ipk`、`cx-acme-dnsapi_*.ipk`（DNS API 集合）、`luci-app-cx-acme_*.ipk`。
 
 ### 安装步骤
 
 依赖 `wget-ssl`、`socat`（standalone 模式的监听器）、`ca-bundle`、`openssl-util`，
-opkg 会从软件源解析；若报找不到依赖，先 `opkg update`，并确认
+OpenWrt 25.12 使用 `apk update` 更新依赖索引。OpenWrt 23.05 上，opkg 会从软件源解析；若报找不到依赖，先 `opkg update`，并确认
 `/etc/opkg/distfeeds.conf` 未被注释。
 
-**从官方 acme 迁移时务必先备份**——opkg remove 会删除旧包的 conffiles
+**从官方 acme 迁移时务必先备份**，卸载旧包可能删除配置文件
 （`/etc/config/acme` 和 `/etc/acme` 账户状态），而迁移需要它们：
 
 ```sh
@@ -52,14 +52,22 @@ cp /etc/config/acme /tmp/acme.config.bak
 cp -a /etc/acme /tmp/acme-state.bak
 
 # 2. 卸载旧包（按实际安装情况增减）
-opkg remove luci-app-acme acme-acmesh-dnsapi acme-acmesh acme-common
+if command -v apk >/dev/null; then
+    apk del luci-app-acme acme-acmesh-dnsapi acme-acmesh acme-common
+else
+    opkg remove luci-app-acme acme-acmesh-dnsapi acme-acmesh acme-common
+fi
 
 # 3. 若被删除则恢复
 [ -f /etc/config/acme ] || cp /tmp/acme.config.bak /etc/config/acme
 [ -d /etc/acme ] || cp -a /tmp/acme-state.bak /etc/acme
 
-# 4. 安装
-opkg install ./cx-acme_*.ipk ./cx-acme-dnsapi_*.ipk ./luci-app-cx-acme_*.ipk
+# 4. 在只含本次构建三个安装包的目录中安装
+if command -v apk >/dev/null; then
+    apk add --allow-untrusted ./*.apk
+else
+    opkg install ./cx-acme_*.ipk ./cx-acme-dnsapi_*.ipk ./luci-app-cx-acme_*.ipk
+fi
 
 # 5. 启用
 /etc/init.d/cx-acme enable
@@ -221,7 +229,7 @@ service uhttpd restart
 预期行为，先卸载旧包（见安装步骤，记得备份）。
 
 **找不到 wget-ssl/socat 依赖**
-`opkg update`；仍失败检查 distfeeds.conf 是否被注释。
+25.12 运行 `apk update` 并检查 `/etc/apk/repositories.d/`。23.05 运行 `opkg update`；仍失败检查 distfeeds.conf 是否被注释。
 
 **日志报 `/usr/lib/acme/notify: not found`**
 迁移状态里保存的旧 hook 路径。新版已在续期前自动重写；旧版手动修：
@@ -254,9 +262,27 @@ sed -i -e 's|/usr/lib/acme/|/usr/lib/cx-acme/|g' \
 
 ## 构建
 
-GitHub Actions 工作流 `.github/workflows/cx-acme.yml` 基于官方 SDK 构建
-（ubuntu-22.04 runner——新版 ubuntu 镜像的 uutils coreutils 会导致 SDK
-prereq 误报）。本地构建等价流程：下载对应版本 SDK → 拷贝
+### 使用 GitHub Actions 构建 APK
+
+**首次推送。** 在仓库根目录执行以下命令，将 25.12 支持提交到 `cx-acme` 分支并推送到 GitHub：
+
+```sh
+git switch cx-acme
+git add .github/workflows/cx-acme.yml net/cx-acme applications/luci-app-cx-acme
+git diff --cached --stat
+git commit -m "cx-acme: support OpenWrt 25.12 APK builds"
+git push -u origin cx-acme
+```
+
+这次推送会触发 **Build cx-acme**，默认使用 OpenWrt **25.12.0** 的 **x86/64** SDK。以后推送到该分支时，只要改动涉及上述两个包目录或工作流文件，就会再次构建。
+
+**手动选择版本和目标。** 在路由器上运行 `ubus call system board`，查看 `release.version` 和 `release.target`。在 GitHub 打开 **Actions → Build cx-acme → Run workflow**，选择分支 `cx-acme`，填写完整版本号和目标（例如 `25.12.0` 和 `mediatek/filogic`），然后点击 **Run workflow**。GitHub 仅在默认分支也包含该工作流时显示手动运行入口。若工作流仅在 `cx-acme` 分支，可使用上面的推送方式构建默认目标。
+
+**下载安装包。** 打开与提交对应的成功运行，在 **Summary → Artifacts** 下载以 `cx-acme-openwrt-sdk-` 开头的压缩包。名称包含版本和目标。解压后应有三个 APK：`cx-acme`（客户端）、`cx-acme-dnsapi`（DNS 验证插件）和 `luci-app-cx-acme`（LuCI 界面）。将所需 APK 复制到路由器后，按[安装步骤](#安装步骤)安装。
+
+### 本地 SDK 构建
+
+下载对应版本 SDK → 拷贝
 `net/cx-acme` 与 `applications/luci-app-cx-acme` 到 `package/` →
 feeds update/install → 选包为 m → `make package/cx-acme/compile
 package/luci-app-cx-acme/compile`。
